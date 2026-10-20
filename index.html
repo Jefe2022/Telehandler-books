@@ -259,7 +259,7 @@ function render(){
   document.getElementById("count").textContent = `${shown.length} entr${shown.length===1?"y":"ies"} in ${yearLabel(year)}`;
   document.getElementById("rows").innerHTML = shown.length ? shown.map(e=>`
     <tr>
-      <td>${e.date}</td>
+      <td>${fmtDate(e.date)}</td>
       <td>${escapeHTML(e.party || "—")}<br><span class="muted">${escapeHTML(e.desc)}</span>${e.vat?`<br><span class="muted">VAT ${money(e.vat)}</span>`:""}</td>
       <td><span class="tag">${escapeHTML(e.category)}</span></td>
       <td>${e.photo ? `<img class="thumb" src="${e.photo}" onclick="viewPhoto('${e.id}')" alt="receipt">` : ""}</td>
@@ -383,6 +383,71 @@ function download(name, text, type){
 document.querySelector('input[name=date]').value = new Date().toISOString().slice(0,10);
 fillCats(); fillYears(); render();
 document.getElementById("year").addEventListener("change", render);
+document.getElementById("photo").addEventListener("change", readReceipt);
+
+// UK date format: day/month/year
+function fmtDate(iso){
+  const [y, m, d] = String(iso).split("-");
+  return `${d}/${m}/${y}`;
+}
+
+// Loads the OCR library only when a receipt is photographed
+function loadScript(src){
+  return new Promise((resolve, reject)=>{
+    if (window.Tesseract) return resolve();
+    const s = document.createElement("script");
+    s.src = src; s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+// Pulls a date and total from receipt text. Assumes UK order (day first).
+function parseReceipt(text){
+  let date = null;
+  const dm = text.match(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2}|\d{4})\b/);
+  if (dm){
+    let d = +dm[1], mo = +dm[2], y = +dm[3];
+    if (y < 100) y += 2000;
+    if (mo > 12){ [d, mo] = [mo, d]; }
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31){
+      date = `${y}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+    }
+  }
+  const amtRe = /£?\s?(\d{1,4}[.,]\d{2})\b/g;
+  let amount = null;
+  for (const line of text.split(/\n/)){
+    if (/total|amount due|to pay|balance/i.test(line) && !/sub\s*-?\s*total/i.test(line)){
+      const all = [...line.matchAll(amtRe)];
+      if (all.length) amount = parseFloat(all[all.length-1][1].replace(",", "."));
+    }
+  }
+  if (amount == null){
+    const all = [...text.matchAll(amtRe)].map(m => parseFloat(m[1].replace(",", ".")));
+    if (all.length) amount = Math.max(...all);
+  }
+  return { date, amount };
+}
+
+// Reads the photographed receipt and fills in the amount and date. The user checks them before saving.
+async function readReceipt(ev){
+  const file = ev.target.files[0];
+  const msg = document.getElementById("saveMsg");
+  if (!file) return;
+  msg.textContent = "Reading receipt… this can take 20 seconds";
+  try {
+    await loadScript("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js");
+    const res = await Tesseract.recognize(file, "eng");
+    const { date, amount } = parseReceipt(res.data.text);
+    const f = document.getElementById("f");
+    if (date) f.date.value = date;
+    if (amount != null) f.amount.value = amount.toFixed(2);
+    msg.textContent = (date || amount != null)
+      ? "Filled in from receipt. Please check the date and amount before saving."
+      : "Could not read the receipt. Please type the date and amount.";
+  } catch(e){
+    msg.textContent = "Could not read the receipt. Please type the date and amount.";
+  }
+}
 </script>
 </body>
 </html>
