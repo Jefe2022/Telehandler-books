@@ -56,6 +56,9 @@
     <label class="ghost" style="padding:10px 14px;border-radius:8px;cursor:pointer;background:#e5e7eb;color:#1d2330;font-size:14px">
       Restore<input type="file" accept="application/json" onchange="importBackup(event)" hidden>
     </label>
+    <label class="ghost" style="padding:10px 14px;border-radius:8px;cursor:pointer;background:#e5e7eb;color:#1d2330;font-size:14px">
+      Import CSV<input type="file" accept=".csv,text/csv" onchange="importCSV(event)" hidden>
+    </label>
   </div>
 </header>
 
@@ -314,6 +317,59 @@ function importBackup(ev){
     } catch(e){ alert("That backup file could not be read."); }
   };
   r.readAsText(file);
+}
+
+// Reads a CSV in the format produced by the spreadsheet: Date,Type,Category,Supplier/Customer,Description,Amount (GBP),Notes
+function parseCSV(text){
+  const rows = [];
+  let row = [], field = "", q = false;
+  for (let i = 0; i < text.length; i++){
+    const c = text[i];
+    if (q){
+      if (c === '"' && text[i+1] === '"'){ field += '"'; i++; }
+      else if (c === '"') q = false;
+      else field += c;
+    } else if (c === '"') q = true;
+    else if (c === ","){ row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r"){
+      if (c === "\r" && text[i+1] === "\n") i++;
+      row.push(field); rows.push(row); row = []; field = "";
+    } else field += c;
+  }
+  if (field || row.length){ row.push(field); rows.push(row); }
+  return rows;
+}
+
+function importCSV(ev){
+  const file = ev.target.files[0]; if (!file) return;
+  const r = new FileReader();
+  r.onload = ()=>{
+    try {
+      const rows = parseCSV(String(r.result).replace(/^﻿/, ""))
+        .filter(x => x.length >= 6 && /^\d{4}-\d{2}-\d{2}$/.test(x[0]));
+      let added = 0, skipped = 0;
+      rows.forEach(x => {
+        const [date, typeTxt, catTxt, party, desc, amountTxt, notes] = x;
+        const amount = parseFloat(amountTxt);
+        if (!amount) { skipped++; return; }
+        const type = /income/i.test(typeTxt) ? "in" : "out";
+        const allowed = type === "in" ? CATS_IN : CATS_OUT;
+        const category = allowed.includes(catTxt) ? catTxt
+          : (type === "in" ? "Other income" : "Other business expense");
+        const description = [desc, notes].filter(Boolean).join(" - ");
+        data.push({
+          id: Date.now().toString(36) + Math.random().toString(36).slice(2,8),
+          type, date, amount, vat: 0, category,
+          party: party || "", desc: description, pay: "Other", photo: null
+        });
+        added++;
+      });
+      save(); fillYears(); render();
+      alert(`Imported ${added} entries.` + (skipped ? ` ${skipped} skipped (no amount).` : ""));
+    } catch(e){ alert("That CSV file could not be read."); }
+  };
+  r.readAsText(file);
+  ev.target.value = "";
 }
 
 function download(name, text, type){
